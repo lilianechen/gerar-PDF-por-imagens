@@ -37,18 +37,19 @@ with aba_imagens:
                     "Ordem no PDF",
                     min_value=1,
                     value=i + 1,
-                    key=f"order_img_{file.name}"
+                    key=f"order_img_{i}"
                 )
 
                 rotation = st.selectbox(
                     "Rotação",
                     options=[0, 90, 180, 270],
                     format_func=lambda x: f"{x}°",
-                    key=f"rot_img_{file.name}"
+                    key=f"rot_img_{i}"
                 )
 
             with col2:
                 try:
+                    file.seek(0)
                     img_preview = Image.open(file)
                     if rotation != 0:
                         img_preview = img_preview.rotate(-rotation, expand=True)
@@ -64,6 +65,7 @@ with aba_imagens:
 
             for order, rotation, file in files_config:
                 try:
+                    file.seek(0)
                     img = Image.open(file).convert("RGB")
                     if rotation != 0:
                         img = img.rotate(-rotation, expand=True)
@@ -107,25 +109,34 @@ with aba_pdfs:
         pages_config = []
         global_idx = 0
 
-        for file in uploaded_pdfs:
+        # carrega os bytes de cada PDF uma única vez
+        pdfs_data = []
+        for file_idx, file in enumerate(uploaded_pdfs):
             file.seek(0)
             pdf_bytes = file.read()
-
             try:
                 doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+                pdfs_data.append({
+                    "file_idx": file_idx,
+                    "name": file.name,
+                    "bytes": pdf_bytes,
+                    "doc": doc,
+                })
             except Exception as e:
                 st.error(f"Não foi possível ler {file.name}: {e}")
                 continue
 
+        for pdf in pdfs_data:
+            doc = pdf["doc"]
             for page_idx in range(len(doc)):
                 global_idx += 1
                 st.markdown("---")
                 col1, col2 = st.columns([2, 2])
 
-                key_suffix = f"{file.name}_{page_idx}"
+                key_suffix = f"{pdf['file_idx']}_{page_idx}"
 
                 with col1:
-                    st.write(f"**Arquivo:** {file.name}")
+                    st.write(f"**Arquivo:** {pdf['name']}")
                     st.caption(f"Página {page_idx + 1} de {len(doc)}")
 
                     order = st.number_input(
@@ -145,7 +156,7 @@ with aba_pdfs:
                 with col2:
                     try:
                         page = doc[page_idx]
-                        mat = fitz.Matrix(1, 1)
+                        mat = fitz.Matrix(1.5, 1.5)
                         if rotation != 0:
                             mat = mat.prerotate(rotation)
                         pix = page.get_pixmap(matrix=mat)
@@ -156,11 +167,9 @@ with aba_pdfs:
                 pages_config.append({
                     "order": order,
                     "rotation": rotation,
-                    "pdf_bytes": pdf_bytes,
+                    "file_idx": pdf["file_idx"],
                     "page_idx": page_idx,
                 })
-
-            doc.close()
 
         if st.button("📚 Gerar PDF consolidado", key="btn_juntar_pdfs"):
             if not pages_config:
@@ -170,9 +179,16 @@ with aba_pdfs:
             pages_config.sort(key=lambda x: x["order"])
             writer = PdfWriter()
 
+            # mapa de file_idx -> bytes para evitar replicar
+            bytes_por_arquivo = {p["file_idx"]: p["bytes"] for p in pdfs_data}
+            readers_cache = {}
+
             for cfg in pages_config:
                 try:
-                    reader = PdfReader(io.BytesIO(cfg["pdf_bytes"]))
+                    fidx = cfg["file_idx"]
+                    if fidx not in readers_cache:
+                        readers_cache[fidx] = PdfReader(io.BytesIO(bytes_por_arquivo[fidx]))
+                    reader = readers_cache[fidx]
                     page = reader.pages[cfg["page_idx"]]
                     if cfg["rotation"] != 0:
                         page.rotate(cfg["rotation"])
@@ -184,6 +200,10 @@ with aba_pdfs:
             pdf_buffer = io.BytesIO()
             writer.write(pdf_buffer)
             pdf_buffer.seek(0)
+
+            # fecha docs do pymupdf
+            for pdf in pdfs_data:
+                pdf["doc"].close()
 
             st.success("✅ PDF consolidado gerado com sucesso!")
             st.download_button(
