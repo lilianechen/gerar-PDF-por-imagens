@@ -1,0 +1,8 @@
+[server]
+mainModuleName = "pdf_tools"
+
+[client]
+toolbarMode = "minimal"
+
+[logger]
+level = "info"
